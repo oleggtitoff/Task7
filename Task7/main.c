@@ -17,6 +17,8 @@
 #define START_AMPLITUDE 0
 #define SIGNAL_TIME 3	//in seconds
 
+#define RING_BUFF_SIZE 128
+
 #define PI 3.14159265358979323846
 
 
@@ -46,6 +48,11 @@ typedef struct {
 	uint32_t samplesNum;
 } Signal;
 
+typedef struct {
+	uint8_t currNum;
+	int16_t samples[RING_BUFF_SIZE];
+} RingBuff;
+
 
 double dBtoGain(double dB);
 int16_t doubleToFixed15(double x);
@@ -53,6 +60,7 @@ void signalInitialization(Signal *signal);
 void fileHeaderInitialization(WavHeader *header, Signal *signal);
 FILE * openFile(char *fileName, _Bool mode);
 void writeHeader(WavHeader *headerBuff, FILE *outputFilePtr);
+void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff);
 int16_t generateToneSignal(Signal *signal);
 void run(Signal *signal, FILE *outputFilePtr);
 
@@ -170,6 +178,18 @@ void writeHeader(WavHeader *headerBuff, FILE *outputFilePtr)
 		system("pause");
 		exit(0);
 	}
+}
+
+void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff)
+{
+	int i;
+
+	for (i = 0; i < RING_BUFF_SIZE; i++)
+	{
+		ringBuff->samples[i] = samplesBuff[i];
+	}
+
+	ringBuff->currNum = 0;
 }
 
 int16_t generateToneSignal(Signal *signal)
