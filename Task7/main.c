@@ -61,9 +61,9 @@ typedef struct {
 
 double dBtoGain(double dB);
 int16_t doubleToFixed15(double x);
-int32_t doubleToFixed31(double x);
+int32_t doubleToFixed29(double x);
 int32_t	Saturation(int64_t x);
-int32_t roundFixed64To32(int64_t x);
+int32_t roundFixed58To29(int64_t x);
 int32_t Add(int32_t x, int32_t y);
 int32_t Sub(int32_t x, int32_t y);
 int32_t Mul(int32_t x, int32_t y);
@@ -77,8 +77,10 @@ void writeHeader(WavHeader *headerBuff, FILE *outputFilePtr);
 
 void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff);
 int16_t generateToneSignal(Signal *signal);
-int16_t expander(RingBuff *ringBuff);
+int16_t signalProc(RingBuff *ringBuff);
+int16_t signalProcDouble(RingBuff *ringBuff);
 void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr);
+
 
 int main()
 {
@@ -117,27 +119,13 @@ int16_t doubleToFixed15(double x)
 	return (int16_t)(x * (double)(1LL << 15));
 }
 
-int32_t doubleToFixed31(double x)
-{
-	if (x >= 1)
-	{
-		return INT32_MAX;
-	}
-	else if (x < -1)
-	{
-		return INT32_MIN;
-	}
-
-	return (int32_t)(x * (double)(1LL << 31));
-}
-
 int32_t doubleToFixed29(double x)
 {
-	if (x >= 7)
+	if (x >= 4)
 	{
 		return INT32_MAX;
 	}
-	else if (x < -7)
+	else if (x < -4)
 	{
 		return INT32_MIN;
 	}
@@ -151,7 +139,7 @@ int32_t	Saturation(int64_t x)
 	{
 		return INT32_MIN;
 	}
-	else if (x >(int64_t)INT32_MAX)
+	else if (x > (int64_t)INT32_MAX)
 	{
 		return INT32_MAX;
 	}
@@ -159,9 +147,9 @@ int32_t	Saturation(int64_t x)
 	return (int32_t)x;
 }
 
-int32_t roundFixed64To32(int64_t x)
+int32_t roundFixed58To29(int64_t x)
 {
-	return (int32_t)((x + (1LL << 31)) >> 32);
+	return Saturation((x + (1LL << 28)) >> 29);
 }
 
 int32_t Add(int32_t x, int32_t y)
@@ -181,7 +169,7 @@ int32_t Mul(int32_t x, int32_t y)
 		return INT32_MAX;
 	}
 
-	return roundFixed64To32(((int64_t)x * y) << 1);
+	return roundFixed58To29((int64_t)x * y);
 }
 
 int32_t Abs(int32_t x)
@@ -197,7 +185,7 @@ int32_t Abs(int32_t x)
 int32_t Div(int32_t x, int32_t y)
 {
 	_Bool isNegative = 0;
-	int32_t precision = 0;
+	int32_t precision = 5;		//be careful with too small values
 	int32_t low = 0;
 	int32_t high = INT32_MAX;
 	int32_t mid;
@@ -211,13 +199,9 @@ int32_t Div(int32_t x, int32_t y)
 	x = Abs(x);
 	y = Abs(y);
 
-	if (y == 0 || (!isNegative && x >= y))
+	if (y == 0)
 	{
 		return INT32_MAX;
-	}
-	else if (isNegative && x > y)
-	{
-		return INT32_MIN;
 	}
 
 	if (x == 0)
@@ -230,7 +214,7 @@ int32_t Div(int32_t x, int32_t y)
 		mid = Add(low, (Sub(high, low) >> 1));
 		midY = Mul(mid, y);
 
-		if (Abs(Sub(midY, x)) <= precision)
+		if (Abs(Sub(midY, x)) <= precision && midY != INT32_MAX && midY != INT32_MIN)
 		{
 			if (isNegative)
 			{
@@ -354,13 +338,13 @@ int16_t generateToneSignal(Signal *signal)
 	return res;
 }
 
-int16_t expander(RingBuff *ringBuff)
+int16_t signalProc(RingBuff *ringBuff)
 {
 	int16_t maxSample = INT16_MIN;
 	uint16_t i;
 	uint16_t index;
 	int16_t tmp;
-	int32_t gain = doubleToFixed31(1);
+	int32_t gain = doubleToFixed29(1.0);
 	int32_t res;
 
 	for (i = 0; i < RING_BUFF_SIZE; i++)
@@ -381,34 +365,33 @@ int16_t expander(RingBuff *ringBuff)
 	}
 	else if (maxSample > doubleToFixed15(LIMITER_THRESHOLD))
 	{
-		gain = Div(doubleToFixed31(LIMITER_THRESHOLD), maxSample);
+		gain = Div(doubleToFixed29(LIMITER_THRESHOLD), (int32_t)maxSample << 14);
 	}
 	else
 	{
 		if (maxSample < doubleToFixed15(COMPRESSOR_THRESHOLD))
 		{
-			res = (int32_t)(((int64_t)maxSample * RATIO + (1LL << 28)) >> 29);
+			res = Mul((int32_t)maxSample << 14, doubleToFixed29(RATIO));
 		}
 		else
 		{
-			res = Div(maxSample, RATIO);
+			res = Div((int32_t)maxSample << 14, doubleToFixed29(RATIO));
 		}
 
-		if (res > doubleToFixed31(LIMITER_THRESHOLD))
+		if (res > doubleToFixed29(LIMITER_THRESHOLD))
 		{
-			res = doubleToFixed31(LIMITER_THRESHOLD);
+			res = doubleToFixed29(LIMITER_THRESHOLD);
 		}
 
-		//gain = Div(res, maxSample);
+		gain = Div(res, (int32_t)maxSample << 14);
 	}
 
 	ringBuff->currNum = (ringBuff->currNum + 1) & (RING_BUFF_SIZE - 1);
 
-	return (int16_t)(((int64_t)ringBuff->samples[(index - 1) & 
-		(RING_BUFF_SIZE - 1)] * gain + (1LL << 30)) >> 31);
+	return (int16_t)(Mul(ringBuff->samples[index], gain));
 }
 
-int16_t expanderDouble(RingBuff *ringBuff)
+int16_t signalProcDouble(RingBuff *ringBuff)
 {
 	double maxSample = 0;
 	double samples[RING_BUFF_SIZE];
@@ -426,7 +409,7 @@ int16_t expanderDouble(RingBuff *ringBuff)
 
 	int index = ringBuff->currNum & (RING_BUFF_SIZE - 1);
 	sample = samples[index];
-	double gain = 1;
+	double gain;
 	double res;
 
 	if (maxSample < EXPANDER_THRESHOLD)
@@ -435,17 +418,17 @@ int16_t expanderDouble(RingBuff *ringBuff)
 	}
 	else if (maxSample > LIMITER_THRESHOLD)
 	{
-		gain = LIMITER_THRESHOLD / fabs(maxSample);
+		gain = LIMITER_THRESHOLD / maxSample;
 	}
 	else
 	{
 		if (maxSample < COMPRESSOR_THRESHOLD)
 		{
-			res = fabs(maxSample) * RATIO;
+			res = maxSample * RATIO;
 		}
 		else
 		{
-			res = fabs(maxSample) / RATIO;
+			res = maxSample / RATIO;
 		}
 
 		if (res > LIMITER_THRESHOLD)
@@ -453,7 +436,7 @@ int16_t expanderDouble(RingBuff *ringBuff)
 			res = LIMITER_THRESHOLD;
 		}
 
-		gain = res / fabs(maxSample);
+		gain = res / maxSample;
 	}
 
 	sample *= gain;
@@ -468,7 +451,7 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 	uint32_t i;
 	uint32_t samples;
 	uint32_t counter = signal->samplesNum * CHANNELS;
-	int16_t *buff = malloc(BITS_PER_SAMPLE * DATA_BUFF_SIZE);
+	int16_t buff[BITS_PER_SAMPLE * DATA_BUFF_SIZE];
 	_Bool isFirstIteration = 1;
 
 	while (counter > 0)
@@ -499,14 +482,12 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 		{
 			ringBuff[0].samples[ringBuff[0].currNum] = buff[i];
 			ringBuff[1].samples[ringBuff[1].currNum] = buff[i];
-			buff[i] = expander(&ringBuff[0]);
-			buff[i + 1] = expanderDouble(&ringBuff[1]);
+			buff[i] = signalProc(&ringBuff[0]);
+			buff[i + 1] = signalProcDouble(&ringBuff[1]);
 		}
 
 		fwrite(buff, BYTES_PER_SAMPLE, samples, outputFilePtr);
 
 		isFirstIteration = 0;
 	}
-
-	free(buff);
 }
