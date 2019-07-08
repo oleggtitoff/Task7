@@ -476,6 +476,8 @@ void run(Signal *signal, RingBuff *ringBuff, int16_t *buff, FILE *outputFilePtr)
 		{
 			ringInitialization(&ringBuff[0], buff);
 			ringInitialization(&ringBuff[1], buff);
+
+			isFirstIteration = 0;
 		}
 
 		for (i = 0; i < samples; i++)
@@ -487,7 +489,5 @@ void run(Signal *signal, RingBuff *ringBuff, int16_t *buff, FILE *outputFilePtr)
 		}
 
 		fwrite(buff, BYTES_PER_SAMPLE, samples * CHANNELS, outputFilePtr);
-
-		isFirstIteration = 0;
 	}
 }
