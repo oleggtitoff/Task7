@@ -79,12 +79,12 @@ void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff);
 int16_t generateToneSignal(Signal *signal);
 int16_t signalProc(RingBuff *ringBuff);
 int16_t signalProcDouble(RingBuff *ringBuff);
-void run(Signal *signal, RingBuff *ringBuff, int16_t *buff, FILE *outputFilePtr);
+void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr);
 
+static int16_t buff[DATA_BUFF_SIZE * CHANNELS];
 
 int main()
 {
-	int16_t buff[DATA_BUFF_SIZE * CHANNELS];
 	Signal signal;
 	RingBuff ringBuff[2];
 	signalInitialization(&signal);
@@ -94,7 +94,7 @@ int main()
 	FILE *outputFilePtr = openFile(OUTPUT_FILE_NAME, 1);
 	writeHeader(&header, outputFilePtr);
 
-	run(&signal, ringBuff, buff, outputFilePtr);
+	run(&signal, ringBuff, outputFilePtr);
 	fclose(outputFilePtr);
 
 	return 0;
@@ -447,7 +447,7 @@ int16_t signalProcDouble(RingBuff *ringBuff)
 	return (int16_t)(sample * (double)(1LL << 15));
 }
 
-void run(Signal *signal, RingBuff *ringBuff, int16_t *buff, FILE *outputFilePtr)
+void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 {
 	uint32_t i;
 	uint32_t samples;
