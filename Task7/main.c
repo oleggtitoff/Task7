@@ -79,11 +79,12 @@ void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff);
 int16_t generateToneSignal(Signal *signal);
 int16_t signalProc(RingBuff *ringBuff);
 int16_t signalProcDouble(RingBuff *ringBuff);
-void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr);
+void run(Signal *signal, RingBuff *ringBuff, int16_t *buff, FILE *outputFilePtr);
 
 
 int main()
 {
+	int16_t buff[DATA_BUFF_SIZE * CHANNELS];
 	Signal signal;
 	RingBuff ringBuff[2];
 	signalInitialization(&signal);
@@ -93,7 +94,7 @@ int main()
 	FILE *outputFilePtr = openFile(OUTPUT_FILE_NAME, 1);
 	writeHeader(&header, outputFilePtr);
 
-	run(&signal, ringBuff, outputFilePtr);
+	run(&signal, ringBuff, buff, outputFilePtr);
 	fclose(outputFilePtr);
 
 	return 0;
@@ -446,12 +447,11 @@ int16_t signalProcDouble(RingBuff *ringBuff)
 	return (int16_t)(sample * (double)(1LL << 15));
 }
 
-void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
+void run(Signal *signal, RingBuff *ringBuff, int16_t *buff, FILE *outputFilePtr)
 {
 	uint32_t i;
 	uint32_t samples;
-	uint32_t counter = signal->samplesNum * CHANNELS;
-	int16_t buff[BITS_PER_SAMPLE * DATA_BUFF_SIZE];
+	uint32_t counter = signal->samplesNum;
 	_Bool isFirstIteration = 1;
 
 	while (counter > 0)
@@ -467,9 +467,9 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 			counter = 0;
 		}
 
-		for (i = 0; i <= samples - CHANNELS; i += CHANNELS)
+		for (i = 0; i < samples; i++)
 		{
-			buff[i] = generateToneSignal(signal);
+			buff[i * CHANNELS] = generateToneSignal(signal);
 		}
 
 		if (isFirstIteration)
@@ -478,15 +478,15 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 			ringInitialization(&ringBuff[1], buff);
 		}
 
-		for (i = 0; i <= samples - CHANNELS; i += CHANNELS)
+		for (i = 0; i < samples; i++)
 		{
-			ringBuff[0].samples[ringBuff[0].currNum] = buff[i];
-			ringBuff[1].samples[ringBuff[1].currNum] = buff[i];
-			buff[i] = signalProc(&ringBuff[0]);
-			buff[i + 1] = signalProcDouble(&ringBuff[1]);
+			ringBuff[0].samples[ringBuff[0].currNum] = buff[i * CHANNELS];
+			ringBuff[1].samples[ringBuff[1].currNum] = buff[i * CHANNELS];
+			buff[i * CHANNELS] = signalProc(&ringBuff[0]);
+			buff[i * CHANNELS + 1] = signalProcDouble(&ringBuff[1]);
 		}
 
-		fwrite(buff, BYTES_PER_SAMPLE, samples, outputFilePtr);
+		fwrite(buff, BYTES_PER_SAMPLE, samples * CHANNELS, outputFilePtr);
 
 		isFirstIteration = 0;
 	}
