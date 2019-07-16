@@ -7,7 +7,7 @@
 
 #define OUTPUT_FILE_NAME "Output.wav"
 #define FILE_HEADER_SIZE 44
-#define BYTES_PER_SAMPLE 2
+#define BYTES_PER_SAMPLE 4
 #define BITS_PER_SAMPLE ((BYTES_PER_SAMPLE) * 8)
 #define SAMPLE_RATE 48000
 #define CHANNELS 2
@@ -76,12 +76,12 @@ FILE * openFile(char *fileName, _Bool mode);
 void writeHeader(WavHeader *headerBuff, FILE *outputFilePtr);
 
 void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff);
-int16_t generateToneSignal(Signal *signal);
+int32_t generateToneSignal(Signal *signal);
 int16_t signalProc(RingBuff *ringBuff);
 int16_t signalProcDouble(RingBuff *ringBuff);
 void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr);
 
-static int16_t buff[DATA_BUFF_SIZE * CHANNELS];
+static int32_t buff[DATA_BUFF_SIZE * CHANNELS];
 
 int main()
 {
@@ -118,6 +118,20 @@ int16_t doubleToFixed15(double x)
 	}
 
 	return (int16_t)(x * (double)(1LL << 15));
+}
+
+static inline int32_t doubleToFixed31(double x)
+{
+	if (x >= 1)
+	{
+		return INT32_MAX;
+	}
+	else if (x < -1)
+	{
+		return INT32_MIN;
+	}
+
+	return (int32_t)(x * (double)(1LL << 31));
 }
 
 int32_t doubleToFixed29(double x)
@@ -273,7 +287,7 @@ void fileHeaderInitialization(WavHeader *header, Signal *signal)
 	header->formatType = 1;
 	header->channels = CHANNELS;
 	header->sampleRate = SAMPLE_RATE;
-	header->bitsPerSample = 16;
+	header->bitsPerSample = BITS_PER_SAMPLE;
 	header->byterate = (SAMPLE_RATE * BITS_PER_SAMPLE * CHANNELS) / 8;
 	header->blockAlign = (BITS_PER_SAMPLE * CHANNELS) / 8;
 	header->dataSize = signal->samplesNum * header->blockAlign;
@@ -328,9 +342,9 @@ void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff)
 	ringBuff->currNum = 0;
 }
 
-int16_t generateToneSignal(Signal *signal)
+int32_t generateToneSignal(Signal *signal)
 {
-	int16_t res = doubleToFixed15(signal->currAmplitude * sin(2 * PI * signal->frequency *
+	int32_t res = doubleToFixed31(signal->currAmplitude * sin(2 * PI * signal->frequency *
 		(double)signal->timeCounter / SAMPLE_RATE));
 
 	signal->currAmplitude += signal->amplitudeStep;
@@ -470,6 +484,7 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 		for (i = 0; i < samples; i++)
 		{
 			buff[i * CHANNELS] = generateToneSignal(signal);
+			buff[i * CHANNELS + 1] = buff[i * CHANNELS];
 		}
 
 		if (isFirstIteration)
@@ -484,8 +499,8 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 		{
 			ringBuff[0].samples[ringBuff[0].currNum] = buff[i * CHANNELS];
 			ringBuff[1].samples[ringBuff[1].currNum] = buff[i * CHANNELS];
-			buff[i * CHANNELS] = signalProc(&ringBuff[0]);
-			buff[i * CHANNELS + 1] = signalProcDouble(&ringBuff[1]);
+			//buff[i * CHANNELS] = signalProc(&ringBuff[0]);
+			//buff[i * CHANNELS + 1] = signalProcDouble(&ringBuff[1]);
 		}
 
 		fwrite(buff, BYTES_PER_SAMPLE, samples * CHANNELS, outputFilePtr);
