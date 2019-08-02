@@ -12,19 +12,35 @@
 #define SAMPLE_RATE 48000
 #define CHANNELS 2
 
-#define SIGNAL_FREQUENCY 400
-#define MAX_AMPLITUDE 0		//in dB
-#define SIGNAL_TIME 3	//in seconds
+#define SIGNAL_FREQUENCY	1000
+#define MAX_AMPLITUDE		0		//in dB
+#define SIGNAL_TIME			1.0	//in seconds
 
-#define	EXPANDER_THRESHOLD 0.06
-#define COMPRESSOR_THRESHOLD 0.5
-#define LIMITER_THRESHOLD 0.9
-#define RATIO 2
+#define NOISE_THR			(dBtoGain(-20))
+#define	EXPANDER_HIGH_THR	(dBtoGain(-7))
+#define COMPRESSOR_LOW_THR	(dBtoGain(-4))
+#define LIMITER_THR			(dBtoGain(-2.5))
+
+// Active flags
+#define NOISE_GATE_IS_ACTIVE	1
+#define EXPANDER_IS_ACTIVE		1
+#define	COMPRESSOR_IS_ACTIVE	1
+#define LIMITER_IS_ACTIVE		1
+
+#define COMPRESSOR_RATIO	2.0
+#define EXPANDER_RATIO		2.0
 
 #define RING_BUFF_SIZE 128
 #define DATA_BUFF_SIZE 1000		//must be bigger than RING_BUFF_SIZE
 
 #define PI 3.14159265358979323846
+
+#define SAMPLES_ATTACK_TIME		0.0000001
+#define SAMPLES_RELEASE_TIME	0.03
+#define GAIN_ATTACK_TIME		0.001
+#define GAIN_RELEASE_TIME		0.001
+#define FADE_ATTACK_TIME		0.001
+#define FADE_RELEASE_TIME		0.001
 
 
 typedef struct {
@@ -46,6 +62,7 @@ typedef struct {
 typedef struct {
 	double frequency;
 	double currAmplitude;
+	_Bool currDirection;	// 1 is Up, 0 - down
 	double maxAmplitude;
 	double amplitudeStep;
 	double signalTime;
@@ -54,9 +71,24 @@ typedef struct {
 } Signal;
 
 typedef struct {
-	uint8_t currNum;
-	int16_t samples[RING_BUFF_SIZE];
+	uint16_t currNum;
+	int32_t samples[RING_BUFF_SIZE];
+	int32_t maxSample;
+	_Bool isFade;
 } RingBuff;
+
+typedef struct {
+	double samplesAlphaAttack;
+	double samplesAlphaRelease;
+	double gainAlphaAttack;
+	double gainAlphaRelease;
+	double fadeAlphaAttack;
+	double fadeAlphaRelease;
+	double expC1;
+	double comprC1;
+	double expC2;
+	double comprC2;
+} Coeffs;
 
 
 double dBtoGain(double dB);
@@ -75,13 +107,14 @@ void fileHeaderInitialization(WavHeader *header, Signal *signal);
 FILE * openFile(char *fileName, _Bool mode);
 void writeHeader(WavHeader *headerBuff, FILE *outputFilePtr);
 
-void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff);
+void ringInitialization(RingBuff *ringBuff, int32_t *samplesBuff);
 int32_t generateToneSignal(Signal *signal);
-int16_t signalProc(RingBuff *ringBuff);
-int16_t signalProcDouble(RingBuff *ringBuff);
-void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr);
+//int16_t signalProc(RingBuff *ringBuff);
+int32_t signalProcDouble(RingBuff *ringBuff);
+void calcCoeffs(Coeffs *coeffs);
+int32_t signalProcDouble1(const Coeffs *coeffs, RingBuff *ringBuff, double *prevSampleY, double *prevGainY);
+void run(Signal *signal, const Coeffs *coeffs, RingBuff *ringBuff, FILE *outputFilePtr);
 
-static int32_t buff[DATA_BUFF_SIZE * CHANNELS];
 
 int main()
 {
@@ -94,7 +127,10 @@ int main()
 	FILE *outputFilePtr = openFile(OUTPUT_FILE_NAME, 1);
 	writeHeader(&header, outputFilePtr);
 
-	run(&signal, ringBuff, outputFilePtr);
+	Coeffs coeffs;
+	calcCoeffs(&coeffs);
+
+	run(&signal, &coeffs, ringBuff, outputFilePtr);
 	fclose(outputFilePtr);
 
 	return 0;
@@ -146,6 +182,11 @@ int32_t doubleToFixed29(double x)
 	}
 
 	return (int32_t)(x * (double)(1LL << 29));
+}
+
+double fixed32ToDouble(int32_t x)
+{
+	return (double)(x / (double)(1LL << 31));
 }
 
 int32_t	Saturation(int64_t x)
@@ -253,12 +294,13 @@ int32_t Div(int32_t x, int32_t y)
 void signalInitialization(Signal *signal)
 {
 	signal->frequency = SIGNAL_FREQUENCY;
-	signal->currAmplitude = 0;
+	signal->currAmplitude = dBtoGain(MAX_AMPLITUDE);
+	signal->currDirection = 0;
 	signal->maxAmplitude = dBtoGain(MAX_AMPLITUDE);
 	signal->signalTime = SIGNAL_TIME;
 	signal->timeCounter = 0;
 	signal->samplesNum = (uint32_t)round(signal->signalTime * SAMPLE_RATE);
-	signal->amplitudeStep = signal->maxAmplitude / signal->samplesNum;
+	signal->amplitudeStep = signal->maxAmplitude / signal->samplesNum * 2;
 }
 
 void fileHeaderInitialization(WavHeader *header, Signal *signal)
@@ -330,16 +372,17 @@ void writeHeader(WavHeader *headerBuff, FILE *outputFilePtr)
 	}
 }
 
-void ringInitialization(RingBuff *ringBuff, int16_t *samplesBuff)
+void ringInitialization(RingBuff *ringBuff, int32_t *samplesBuff)
 {
 	int i;
+	ringBuff->currNum = 0;
+	ringBuff->isFade = 0;
 
 	for (i = 0; i < RING_BUFF_SIZE; i++)
 	{
-		ringBuff->samples[i] = samplesBuff[i];
+		ringBuff->samples[i] = samplesBuff[i * CHANNELS];
+		samplesBuff[i * CHANNELS] = 0;
 	}
-
-	ringBuff->currNum = 0;
 }
 
 int32_t generateToneSignal(Signal *signal)
@@ -347,66 +390,84 @@ int32_t generateToneSignal(Signal *signal)
 	int32_t res = doubleToFixed31(signal->currAmplitude * sin(2 * PI * signal->frequency *
 		(double)signal->timeCounter / SAMPLE_RATE));
 
-	signal->currAmplitude += signal->amplitudeStep;
+	if (signal->currDirection)
+	{
+		signal->currAmplitude += signal->amplitudeStep;
+	}
+	else
+	{
+		signal->currAmplitude -= signal->amplitudeStep;
+	}
+
+	if (fabs(signal->currAmplitude - signal->maxAmplitude) < 0.00000000000000001)
+	{
+		signal->currDirection = 0;
+	}
+
+	if (fabs(signal->currAmplitude) < 0.00000000000000001)
+	{
+		signal->currDirection = 1;
+	}
+
 	signal->timeCounter++;
 
 	return res;
 }
 
-int16_t signalProc(RingBuff *ringBuff)
-{
-	int16_t maxSample = INT16_MIN;
-	uint16_t i;
-	uint16_t index;
-	int16_t tmp;
-	int32_t gain = doubleToFixed29(1.0);
-	int32_t res;
+//int16_t signalProc(RingBuff *ringBuff)
+//{
+//	int16_t maxSample = INT16_MIN;
+//	uint16_t i;
+//	uint16_t index;
+//	int16_t tmp;
+//	int32_t gain = doubleToFixed29(1.0);
+//	int32_t res;
+//
+//	for (i = 0; i < RING_BUFF_SIZE; i++)
+//	{
+//		tmp = Abs(ringBuff->samples[i]);
+//
+//		if (tmp > maxSample)
+//		{
+//			maxSample = tmp;
+//		}
+//	}
+//	
+//	index = ringBuff->currNum & (RING_BUFF_SIZE - 1);
+//
+//	if (maxSample < doubleToFixed15(EXPANDER_THRESHOLD))
+//	{
+//		gain = 0;
+//	}
+//	else if (maxSample > doubleToFixed15(LIMITER_THR))
+//	{
+//		gain = Div(doubleToFixed29(LIMITER_THR), (int32_t)maxSample << 14);
+//	}
+//	else
+//	{
+//		if (maxSample < doubleToFixed15(COMPRESSOR_THRESHOLD))
+//		{
+//			res = Mul((int32_t)maxSample << 14, doubleToFixed29(RATIO));
+//		}
+//		else
+//		{
+//			res = Div((int32_t)maxSample << 14, doubleToFixed29(RATIO));
+//		}
+//
+//		if (res > doubleToFixed29(LIMITER_THR))
+//		{
+//			res = doubleToFixed29(LIMITER_THR);
+//		}
+//
+//		gain = Div(res, (int32_t)maxSample << 14);
+//	}
+//
+//	ringBuff->currNum = (ringBuff->currNum + 1) & (RING_BUFF_SIZE - 1);
+//
+//	return (int16_t)(Mul(ringBuff->samples[index], gain));
+//}
 
-	for (i = 0; i < RING_BUFF_SIZE; i++)
-	{
-		tmp = Abs(ringBuff->samples[i]);
-
-		if (tmp > maxSample)
-		{
-			maxSample = tmp;
-		}
-	}
-	
-	index = ringBuff->currNum & (RING_BUFF_SIZE - 1);
-
-	if (maxSample < doubleToFixed15(EXPANDER_THRESHOLD))
-	{
-		gain = 0;
-	}
-	else if (maxSample > doubleToFixed15(LIMITER_THRESHOLD))
-	{
-		gain = Div(doubleToFixed29(LIMITER_THRESHOLD), (int32_t)maxSample << 14);
-	}
-	else
-	{
-		if (maxSample < doubleToFixed15(COMPRESSOR_THRESHOLD))
-		{
-			res = Mul((int32_t)maxSample << 14, doubleToFixed29(RATIO));
-		}
-		else
-		{
-			res = Div((int32_t)maxSample << 14, doubleToFixed29(RATIO));
-		}
-
-		if (res > doubleToFixed29(LIMITER_THRESHOLD))
-		{
-			res = doubleToFixed29(LIMITER_THRESHOLD);
-		}
-
-		gain = Div(res, (int32_t)maxSample << 14);
-	}
-
-	ringBuff->currNum = (ringBuff->currNum + 1) & (RING_BUFF_SIZE - 1);
-
-	return (int16_t)(Mul(ringBuff->samples[index], gain));
-}
-
-int16_t signalProcDouble(RingBuff *ringBuff)
+int32_t signalProcDouble(RingBuff *ringBuff)
 {
 	double maxSample = 0;
 	double samples[RING_BUFF_SIZE];
@@ -414,7 +475,7 @@ int16_t signalProcDouble(RingBuff *ringBuff)
 
 	for (int i = 0; i < RING_BUFF_SIZE; i++)
 	{
-		samples[i] = (double)(ringBuff->samples[i] / (double)(1LL << 15));
+		samples[i] = (double)(ringBuff->samples[i] / (double)(1LL << 31));
 
 		if (fabs(samples[i]) > maxSample)
 		{
@@ -424,48 +485,185 @@ int16_t signalProcDouble(RingBuff *ringBuff)
 
 	int index = ringBuff->currNum & (RING_BUFF_SIZE - 1);
 	sample = samples[index];
-	double gain;
-	double res;
+	double gain = 1.0;
 
-	if (maxSample < EXPANDER_THRESHOLD)
+	if (maxSample < NOISE_THR)
 	{
 		gain = 0;
 	}
-	else if (maxSample > LIMITER_THRESHOLD)
+	else if (maxSample > LIMITER_THR)
 	{
-		gain = LIMITER_THRESHOLD / maxSample;
+		gain = LIMITER_THR / maxSample;
 	}
 	else
 	{
-		if (maxSample < COMPRESSOR_THRESHOLD)
+		if (maxSample < EXPANDER_HIGH_THR)
 		{
-			res = maxSample * RATIO;
+			//res = (EXPANDER_HIGH_THR - ((EXPANDER_HIGH_THR - maxSample) / EXPANDER_RATIO));
+			//gain = res / maxSample;
+			gain = ((EXPANDER_HIGH_THR - (EXPANDER_HIGH_THR / EXPANDER_RATIO)) / maxSample) + (1 / EXPANDER_RATIO);
 		}
-		else
+		else if (maxSample > COMPRESSOR_LOW_THR)
 		{
-			res = maxSample / RATIO;
+			//res = (COMPRESSOR_LOW_THR + ((maxSample - COMPRESSOR_LOW_THR) / COMPRESSOR_RATIO));
+			//gain = res / maxSample;
+			gain = ((COMPRESSOR_LOW_THR - (COMPRESSOR_LOW_THR / COMPRESSOR_RATIO)) / maxSample) + (1 / COMPRESSOR_RATIO);
 		}
-
-		if (res > LIMITER_THRESHOLD)
-		{
-			res = LIMITER_THRESHOLD;
-		}
-
-		gain = res / maxSample;
 	}
 
 	sample *= gain;
 
 	ringBuff->currNum = (ringBuff->currNum + 1) & (RING_BUFF_SIZE - 1);
 
-	return (int16_t)(sample * (double)(1LL << 15));
+	return (int32_t)(sample * (double)(1LL << 31));
 }
 
-void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
+void calcCoeffs(Coeffs *coeffs)
 {
+	coeffs->samplesAlphaAttack = (double)1 - exp((double)-1 / (SAMPLE_RATE * SAMPLES_ATTACK_TIME));
+	coeffs->samplesAlphaRelease = (double)1 - exp((double)-1 / (SAMPLE_RATE * SAMPLES_RELEASE_TIME));
+	coeffs->gainAlphaAttack = (double)1 - exp((double)-1 / (SAMPLE_RATE * GAIN_ATTACK_TIME));
+	coeffs->gainAlphaRelease = (double)1 - exp((double)-1 / (SAMPLE_RATE * GAIN_RELEASE_TIME));
+	coeffs->fadeAlphaAttack = (double)1 - exp((double)-1 / (SAMPLE_RATE * FADE_ATTACK_TIME));
+	coeffs->fadeAlphaRelease = (double)1 - exp((double)-1 / (SAMPLE_RATE * FADE_RELEASE_TIME));
+	coeffs->expC1 = ((double)1 / EXPANDER_RATIO) - 1;
+	coeffs->comprC1 = (double)1 - ((double)1 / COMPRESSOR_RATIO);
+	coeffs->expC2 = pow(EXPANDER_HIGH_THR, coeffs->expC1);
+	coeffs->comprC2 = pow(COMPRESSOR_LOW_THR, coeffs->comprC1);
+}
+
+void updateMaxRingBuffValue(RingBuff *ringBuff)
+{
+	uint16_t i;
+	ringBuff->maxSample = ringBuff->samples[0];
+
+	for (i = 0; i < RING_BUFF_SIZE; i++)
+	{
+		if (abs(ringBuff->samples[i]) > ringBuff->maxSample)
+		{
+			ringBuff->maxSample = abs(ringBuff->samples[i]);
+		}
+	}
+}
+
+int32_t signalProcDouble1(const Coeffs *coeffs, RingBuff *ringBuff, double *prevSampleY, double *prevGainY)
+{
+	double gain = 1.0;
+	double limGain = 0;
+	double alpha = 0;
+	double sampleN = 0;
+	double gainN = 0;
+	double res = 0;
+	double sampleD = fixed32ToDouble(ringBuff->samples[ringBuff->currNum]);
+
+	if (fabs((*prevGainY) - gain) <= 0.00000001)
+	{
+		ringBuff->isFade = 0;
+	}
+	
+	if (LIMITER_IS_ACTIVE)
+	{
+		updateMaxRingBuffValue(ringBuff);
+	}
+
+	if (fabs((*prevSampleY)) <= fabs(sampleD))
+	{
+		alpha = coeffs->samplesAlphaAttack;
+	}
+	else
+	{
+		alpha = coeffs->samplesAlphaRelease;
+	}
+
+	sampleN = fabs(sampleD) * alpha + ((double)1 - alpha) * (*prevSampleY);
+	
+	if (sampleN < NOISE_THR && NOISE_GATE_IS_ACTIVE)
+	{
+		gain = 0;
+		ringBuff->isFade = 1;
+	}
+
+	if ((sampleN > COMPRESSOR_LOW_THR && COMPRESSOR_IS_ACTIVE) || (fixed32ToDouble(ringBuff->maxSample) > LIMITER_THR && LIMITER_IS_ACTIVE))
+	{
+		if (COMPRESSOR_IS_ACTIVE)
+		{
+			gainN = coeffs->comprC2 * pow(sampleN, -(coeffs->comprC1));
+
+			if ((*prevGainY) >= gainN)
+			{
+				alpha = coeffs->fadeAlphaAttack;
+			}
+			else
+			{
+				alpha = coeffs->fadeAlphaRelease;
+			}
+
+			gain = gainN * alpha + ((double)1 - alpha) * (*prevGainY);
+		}
+
+		if (LIMITER_IS_ACTIVE)
+		{
+			limGain = LIMITER_THR / fixed32ToDouble(ringBuff->maxSample);
+			ringBuff->isFade = 1;
+
+			if (limGain < gain)
+			{
+				gain = limGain;
+				ringBuff->isFade = 0;
+			}
+		}
+	}
+	else if (sampleN < EXPANDER_HIGH_THR && (sampleN >= NOISE_THR || !NOISE_GATE_IS_ACTIVE)  && EXPANDER_IS_ACTIVE)
+	{
+		gainN = coeffs->expC2 * pow(sampleN, -(coeffs->expC1));
+
+		if ((*prevGainY) >= gainN)
+		{
+			alpha = coeffs->gainAlphaAttack;
+		}
+		else
+		{
+			alpha = coeffs->gainAlphaRelease;
+		}
+
+		gain = gainN * alpha + ((double)1 - alpha) * (*prevGainY);
+		
+		ringBuff->isFade = 1;
+	}
+	else if (ringBuff->isFade)
+	{
+		if (fabs((*prevGainY) - gain) > 0.00000001)
+		{
+			if ((*prevGainY) < gain)
+			{
+				alpha = coeffs->fadeAlphaAttack;
+			}
+			else
+			{
+				alpha = coeffs->fadeAlphaRelease;
+			}
+
+			gain = gain * alpha + ((double)1 - alpha) * (*prevGainY);
+		}
+	}
+
+	res = gain * sampleD;
+
+	*prevSampleY = sampleN;
+	*prevGainY = gain;
+
+	return (int32_t)(res * (double)(1LL << 31));
+}
+
+void run(Signal *signal, const Coeffs *coeffs, RingBuff *ringBuff, FILE *outputFilePtr)
+{
+	int32_t dataBuff[DATA_BUFF_SIZE * CHANNELS];
+	int32_t res;
 	uint32_t i;
 	uint32_t samples;
 	uint32_t counter = signal->samplesNum;
+	double prevSampleY = 0;
+	double prevGainY = 0;
 	_Bool isFirstIteration = 1;
 
 	while (counter > 0)
@@ -483,26 +681,35 @@ void run(Signal *signal, RingBuff *ringBuff, FILE *outputFilePtr)
 
 		for (i = 0; i < samples; i++)
 		{
-			buff[i * CHANNELS] = generateToneSignal(signal);
-			buff[i * CHANNELS + 1] = buff[i * CHANNELS];
+			dataBuff[i * CHANNELS] = generateToneSignal(signal);
+			dataBuff[i * CHANNELS + 1] = dataBuff[i * CHANNELS];
 		}
 
 		if (isFirstIteration)
 		{
-			ringInitialization(&ringBuff[0], buff);
-			ringInitialization(&ringBuff[1], buff);
-
+			ringInitialization(&ringBuff[0], dataBuff);
+			ringInitialization(&ringBuff[1], dataBuff);
+			i = RING_BUFF_SIZE;
 			isFirstIteration = 0;
 		}
-
-		for (i = 0; i < samples; i++)
+		else
 		{
-			ringBuff[0].samples[ringBuff[0].currNum] = buff[i * CHANNELS];
-			ringBuff[1].samples[ringBuff[1].currNum] = buff[i * CHANNELS];
-			//buff[i * CHANNELS] = signalProc(&ringBuff[0]);
-			//buff[i * CHANNELS + 1] = signalProcDouble(&ringBuff[1]);
+			i = 0;
 		}
 
-		fwrite(buff, BYTES_PER_SAMPLE, samples * CHANNELS, outputFilePtr);
+		for (i; i < samples; i++)
+		{
+			res =  signalProcDouble1(coeffs, ringBuff, &prevSampleY, &prevGainY);
+			//buff[i * CHANNELS + 1] = signalProcDouble(&ringBuff[1]);
+
+			ringBuff[0].samples[ringBuff[0].currNum] = dataBuff[i * CHANNELS];
+			ringBuff[1].samples[ringBuff[1].currNum] = dataBuff[i * CHANNELS + 1];
+
+			dataBuff[i * CHANNELS] = res;
+
+			ringBuff->currNum = (ringBuff->currNum + 1) & (RING_BUFF_SIZE - 1);
+		}
+
+		fwrite(dataBuff, BYTES_PER_SAMPLE, samples * CHANNELS, outputFilePtr);
 	}
 }
