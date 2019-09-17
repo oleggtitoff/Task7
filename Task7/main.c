@@ -17,7 +17,7 @@
 #define SIGNAL_TIME			1.0	//in seconds
 
 #define NOISE_THR			(dBtoGain(-20))
-#define	EXPANDER_HIGH_THR	(dBtoGain(-7))
+#define	EXPANDER_HIGH_THR	(dBtoGain(-6))
 #define COMPRESSOR_LOW_THR	(dBtoGain(-5))
 #define LIMITER_THR			(dBtoGain(-2.0))
 
@@ -27,8 +27,8 @@
 #define	COMPRESSOR_IS_ACTIVE	1
 #define LIMITER_IS_ACTIVE		1
 
-#define COMPRESSOR_RATIO	1.25
-#define EXPANDER_RATIO		0.75
+#define EXPANDER_RATIO		0.65
+#define COMPRESSOR_RATIO	1.5
 
 #define RING_BUFF_SIZE 128
 #define DATA_BUFF_SIZE 1000		//must be bigger than RING_BUFF_SIZE
@@ -918,41 +918,50 @@ int32_t fixedPowOf2(int32_t x);
 int32_t LeftShift(int32_t x, int8_t shift);
 int32_t RightShift(int32_t x, int8_t shift);
 
+double NRDivDouble(double x, double y);
+int32_t NRDiv(int32_t x, int32_t y);
+
 int main()
 {
-	//double step = 2.0 / 254.0;
-	//int32_t fixedStep = doubleToFixed31(step);
-	//double inputs[255];
-	//double outputs[255];
-	//double curr = 0.0;
+	//double step = fixed32ToDouble(0x100000) * 16;
+	//int32_t fixedStep = doubleToFixed31(step / 16);
+	//double inputs[260];
+	//double outputs[260];
+	//double curr = -1.0;
+	//
+	//printf("double step = %f\n", step);
+	//printf("fixed step = %d\n", fixedStep);
+	////printf("1. 0x%x\n", doubleToFixed31(pow(2.0, 0.36851) / 16));
+	////printf("2. 0x%x\n", doubleToFixed31(pow(2.0, -0.6846) / 16));
+	////printf("%f -> %f -> 0x%x\n\n", pow(2.0, fixed32ToDouble(0x7fffffff)), pow(2.0, fixed32ToDouble(0x7fffffff)) / 16, doubleToFixed31(pow(2.0, fixed32ToDouble(0x7fffffff)) / 16));
 	//
 	////printf("inputs = \n");
 	//
-	//for (int i = 0; i < 128; i++)
+	//for (int i = 0; i < 257; i++)
 	//{
 	//	inputs[i] = curr;
-	//	outputs[i] = pow(2.0, curr) / 16;
+	//	outputs[i] = pow(2.0, curr);// / 16;
 	//	curr += step;
 	//
-	//	//printf("0x%x,\n", RightShift(doubleToFixed31(inputs[i]), 4));
+	//	//printf("%d. 0x%x,\n", i, RightShift(doubleToFixed31(inputs[i]), 4));
 	//}
 	//
-	//curr = 0 - step;
+	////curr = 0 - step;
+	////
+	////for (int i = 129; i < 257; i++)
+	////{
+	////	inputs[i] = curr;
+	////	outputs[i] = pow(2.0, curr);// / 16;
+	////	curr -= step;
+	////
+	////	//printf("0x%x,\n", RightShift(doubleToFixed31(inputs[i]), 4));
+	////}
 	//
-	//for (int i = 128; i < 255; i++)
+	////printf("\noutputs = \n");
+	//
+	//for (int i = 0; i < 257; i++)
 	//{
-	//	inputs[i] = curr;
-	//	outputs[i] = pow(2.0, curr) / 16;
-	//	curr -= step;
-	//
-	//	//printf("0x%x,\n", RightShift(doubleToFixed31(inputs[i]), 4));
-	//}
-	//
-	//printf("\noutputs = \n");
-	//
-	//for (int i = 0; i < 255; i++)
-	//{
-	//	printf("0x%x,\n", doubleToFixed31(outputs[i]));//RightShift(doubleToFixed31(outputs[i]), 4));
+	//	printf("%d. %f -> %f,\n", i, inputs[i], outputs[i]);//RightShift(doubleToFixed31(outputs[i]), 4));
 	//}
 	//
 	//system("pause");
@@ -967,20 +976,46 @@ int main()
 	////int32_t xFixedLog = doubleToFixed31(xLog);
 	//double res = fixed32ToDouble(fixedPow(x, y)) * 16;
 
-	Signal signal;
-	RingBuff ringBuff[2];
-	signalInitialization(&signal);
+	//Signal signal;
+	//RingBuff ringBuff[2];
+	//signalInitialization(&signal);
+	//
+	//WavHeader header;
+	//fileHeaderInitialization(&header, &signal);
+	//FILE *outputFilePtr = openFile(OUTPUT_FILE_NAME, 1);
+	//writeHeader(&header, outputFilePtr);
+	//
+	//Coeffs coeffs;
+	//calcCoeffs(&coeffs);
+	//
+	//run(&signal, &coeffs, ringBuff, outputFilePtr);
+	//fclose(outputFilePtr);
 
-	WavHeader header;
-	fileHeaderInitialization(&header, &signal);
-	FILE *outputFilePtr = openFile(OUTPUT_FILE_NAME, 1);
-	writeHeader(&header, outputFilePtr);
+	//double c1d = 140.0 / 33.0;
+	//double c2d = -64.0 / 11.0;
+	//double c3d = 256.0 / 99.0;
+	//
+	//int32_t c1 = doubleToFixed31(c1d / 8);
+	//int32_t c2 = doubleToFixed31(c2d / 8);
+	//int32_t c3 = doubleToFixed31(c3d / 8);
 
-	Coeffs coeffs;
-	calcCoeffs(&coeffs);
+	double ud1;
+	double ud2;
+	//ud = NRDivDouble(0.324, 0.73);
+	//u = fixed32ToDouble(NRDiv(doubleToFixed31(0.324), doubleToFixed31(0.73)));
+	//ud = NRDivDouble(-0.59, 0.73);
+	//u = fixed32ToDouble(NRDiv(doubleToFixed31 (-0.59), doubleToFixed31(0.73)));
+	//ud = NRDivDouble(0.324, -0.329);
+	//u = fixed32ToDouble(NRDiv(doubleToFixed31(0.324), doubleToFixed31(-0.329)));
+	//ud = NRDivDouble(0.324, 0.324);
+	//u = fixed32ToDouble(NRDiv(doubleToFixed31(0.324), doubleToFixed31(0.324)));
+	//ud = NRDivDouble(0, 0.73);
+	//u = fixed32ToDouble(NRDiv(doubleToFixed31(0), doubleToFixed31(0.73)));
+	//ud = NRDivDouble(0.324, 0);
+	//u = fixed32ToDouble(NRDiv(doubleToFixed31(0.324), doubleToFixed31(0)));
 
-	run(&signal, &coeffs, ringBuff, outputFilePtr);
-	fclose(outputFilePtr);
+	ud1 = pow(2, 0.07863);
+	ud2 = pow(2, -0.07863);
 
 	return 0;
 }
@@ -1143,6 +1178,154 @@ int32_t Div(int32_t x, int32_t y)
 			high = mid;
 		}
 	}
+}
+
+double NRDivDouble(double x, double y)
+{
+	// coeffs
+	double c1 = 140.0 / 33.0;
+	double c2 = -64.0 / 11.0;
+	double c3 = 256.0 / 99.0;
+
+	double r;
+	double e;
+	double k;
+	double res;
+
+	int8_t i;
+	int8_t resIsNegative = 0;
+
+	// sign calculation
+	if ((x < 0 && y >= 0) || (x >= 0 && y < 0))
+	{
+		resIsNegative = 1;
+	}
+
+	// get absolute values of x and y
+	x = fabs(x);
+	y = fabs(y);
+
+	// special cases handling
+	if (x == 0)
+	{
+		return 0;
+	}
+
+	if (y == 0)
+	{
+		return 1;
+	}
+
+	if (x > y)
+	{
+		x = y;
+	}
+
+	// normalization to [0.5, 1.0]
+	while (y < 0.5)
+	{
+		x *= 2;
+		y *= 2;
+	}
+
+	while (y > 1.0)
+	{
+		x /= 2;
+		y /= 2;
+	}
+
+	// precalculation
+	r = c1 + y * (c2 + y * c3);
+
+	// loop calculation
+	for (i = 0; i < 2; i++)
+	{
+		e = 1.0 - y * r;
+		k = r * e;
+		r = r + k + k * e;
+	}
+
+	// final multiplication
+	res = x * r;
+
+	// if result must be negative
+	if (resIsNegative)
+	{
+		res = 0 - res;
+	}
+
+	return res;
+}
+
+int32_t NRDiv(int32_t x, int32_t y)
+{
+	// coeffs
+	int32_t c1 = 0x43e0f83e;		// Q28
+	int32_t c2 = 0xa2e8ba2f;		// Q28
+	int32_t c3 = 0x295fad40;		// Q28
+
+	int32_t r;						// Q28
+	int32_t e;						// Q28
+	int32_t k;						// Q28
+	int32_t res;
+
+	int8_t i;
+	int8_t resIsNegative = 0;
+
+	// sign calculation
+	if ((x ^ y) < 0)
+	{
+		resIsNegative = 1;
+	}
+
+	// get absolute values of x and y
+	x = abs(x);
+	y = abs(y);
+
+	// special cases handling
+	if (x == 0)
+	{
+		return 0;
+	}
+
+	if (y == 0)
+	{
+		return INT32_MAX;
+	}
+
+	if (x > y)
+	{
+		x = y;
+	}
+
+	// normalization to [0.5, 1.0]
+	while (y < 0x40000000)
+	{
+		x <<= 1;
+		y <<= 1;
+	}
+
+	// precalculation
+	r = Add(c1, Mul(y, Add(c2, Mul(y, c3))));		// Q28
+
+	// loop calculation
+	for (i = 0; i < 2; i++)
+	{
+		e = Sub(0x0fffffff, Mul(y, r));
+		k = LeftShift(Mul(r, e), 3);
+		r = Add(r, Add(k, LeftShift(Mul(k, e), 3)));
+	}
+
+	// final multiplication
+	res = LeftShift(Mul(x, r), 3);
+
+	// if result must be negative
+	if (resIsNegative)
+	{
+		res = Sub(0x0, res);
+	}
+
+	return res;
 }
 
 void signalInitialization(Signal *signal)
@@ -1638,11 +1821,6 @@ int32_t signalProc1(const Coeffs *coeffs, RingBuff *ringBuff)
 	_Bool isCompressor = 0;
 	_Bool isLimiter = 0;
 
-	if (Abs(ringBuff->prevGainY - gain) == 0)
-	{
-		ringBuff->isFade = 0;
-	}
-
 	if (Abs(ringBuff->prevSampleY) <= Abs(sample))
 	{
 		alpha = coeffs->FsamplesAlphaAttack;
@@ -1712,19 +1890,24 @@ int32_t signalProc1(const Coeffs *coeffs, RingBuff *ringBuff)
 		gain = 0x08000000;
 	}
 
-	if (!isCompressor && !isExpander && !isLimiter && ringBuff->isFade)
+	if (ringBuff->prevGainY - gain == 0)
 	{
-		if (ringBuff->prevGainY < gain)
-		{
-			alpha = coeffs->FfadeAlphaAttack;
-		}
-		else
-		{
-			alpha = coeffs->FfadeAlphaRelease;
-		}
-
-		gain = Add(Mul(gain, alpha), Mul(Sub(0x7fffffff, alpha), ringBuff->prevGainY));
+		ringBuff->isFade = 0;
 	}
+
+	//if (!isCompressor && !isExpander && !isLimiter && ringBuff->isFade)
+	//{
+	//	if (ringBuff->prevGainY <= gain)
+	//	{
+	//		alpha = coeffs->FfadeAlphaAttack;
+	//	}
+	//	else
+	//	{
+	//		alpha = coeffs->FfadeAlphaRelease;
+	//	}
+
+	//	gain = Add(Mul(gain, alpha), Mul(Sub(0x7fffffff, alpha), ringBuff->prevGainY));
+	//}
 
 	updateMaxRingBuffValue(ringBuff);
 	limCheck = LeftShift(Mul(ringBuff->maxSample, gain), 4);
